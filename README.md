@@ -21,7 +21,16 @@ A transcrição é executada localmente, sem envio dos áudios a uma API.
 
 ## Preparar e processar uma sessão
 
-Extraia as faixas individuais da gravação para uma pasta exclusiva por sessão.
+Depois de clonar o repositório, você precisa fornecer suas próprias gravações.
+Coloque os arquivos na pasta `data/raw/<sessao>/`, dentro da raiz deste projeto.
+Crie uma pasta exclusiva para cada gravação; o nome dessa pasta será o valor
+usado em `--session`. Por exemplo, para `--session session_001`:
+
+```bash
+mkdir -p data/raw/session_001
+```
+
+Extraia as faixas individuais do ZIP do Craig para essa pasta.
 Os nomes abaixo são fictícios:
 
 ```text
@@ -34,11 +43,51 @@ data/raw/session_001/
 Preserve o `info.txt` do Craig, se disponível: ele permite identificar o início
 da gravação. Não coloque somente o ZIP na pasta; extraia os áudios primeiro.
 São reconhecidos FLAC, WAV, OGG, OGA, MP3, M4A, MP4, AAC, OPUS e WebM.
+Mantenha os nomes das faixas: o sistema usa o nome do arquivo sem a extensão e
+sem o prefixo numérico para identificar o participante. Por exemplo,
+`1-participante_a.flac` identifica `participante_a`.
+
+### Onde fica cada arquivo
+
+Todos os caminhos abaixo são relativos à raiz do projeto. Use o mesmo
+identificador de sessão em todas as etapas.
+
+| Pasta ou arquivo | Conteúdo e como preencher |
+| --- | --- |
+| `data/raw/<sessao>/` | Entrada manual: faixas de áudio extraídas e `info.txt` do Craig, quando disponível. |
+| `data/processed/<sessao>/` | Gerado por `transcribe`: `segments.parquet`, `segments.csv`, `transcricao.txt` e `metadata.json`. |
+| `data/curated/<sessao>/` | Gerado por `analyze`: `speaker_metrics.csv` e `top_words.csv`. |
+| `data/quality/<sessao>/` | Gerado por `validate`: `validation_report.json`. |
+| `data/backups/<sessao>/` | Gerado automaticamente antes de reprocessar uma sessão que já possui resultados. |
+| `reports/` | Destino sugerido para os relatórios HTML exportados com `main.py dashboard --output`. |
+| `.env` | Configuração local opcional de MinIO/PostgreSQL; copie de `.env.example` e preencha suas credenciais. |
+
+As pastas de saída são criadas pelo pipeline. Para começar com seus áudios,
+preencha apenas `data/raw/<sessao>/` e execute:
 
 ```bash
 .venv/bin/python main.py inspect --session session_001
 .venv/bin/python main.py process --session session_001
 ```
+
+### Por que os dados não estão no Git?
+
+As gravações e os resultados reais ficaram fora do Git de propósito: podem
+conter vozes, apelidos, conversas privadas e informações pessoais. Áudios e
+arquivos compactados também podem ser grandes. Credenciais e configurações
+locais não devem ser compartilhadas junto com o código.
+
+O `.gitignore` exclui o conteúdo de `data/`, os relatórios em `reports/`, os
+arquivos de áudio, exportações CSV/Parquet, arquivos compactados e `.env`.
+Somente os arquivos vazios `.gitkeep` das pastas `raw`, `processed`, `curated`
+e `quality` são versionados para preservar a estrutura inicial.
+
+Por isso, `git clone` e `git pull` não baixam as sessões reais, e `git push`
+não envia esses arquivos locais ignorados. Cada pessoa deve obter os áudios
+por um meio privado autorizado e processá-los localmente. Sem uma sessão
+processada, use a opção **Demonstração** do dashboard para conhecer a interface.
+Não use `git add -f` para incluir dados privados; o Git não substitui o backup
+local das gravações e dos resultados.
 
 `process` executa transcrição, análise e validação. O padrão é `large-v3` na
 CPU com int8; escolha outro modelo com `--model small`, por exemplo.
