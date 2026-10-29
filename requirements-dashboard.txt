@@ -1,0 +1,4 @@
+-r requirements-test.txt
+streamlit>=1.50,<2
+Pillow>=10.1,<13
+altair>=5,<7

@@ -1,0 +1,7 @@
+# Dependencias compartilhadas do pipeline e dos testes unittest.
+# O modelo Whisper e simulado: CI nao precisa de faster-whisper, av ou GPU.
+pandas>=2.2,<4
+pyarrow>=18
+minio>=7.2,<8
+python-dotenv>=1,<2
+psycopg[binary]>=3.2,<4

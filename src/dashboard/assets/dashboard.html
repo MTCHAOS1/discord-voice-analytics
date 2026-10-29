@@ -1,0 +1,38 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="referrer" content="no-referrer">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; connect-src 'none'; img-src 'none'; base-uri 'none'; form-action 'none'">
+  <title>Discord Voice Analytics · __TITLE__</title>
+  <style>__STYLE__</style>
+</head>
+<body>
+  <main>
+    <header><div class="brand"><span class="mark" aria-hidden="true">◉</span> DISCORD VOICE ANALYTICS</div><span class="badge">RELATÓRIO LOCAL</span></header>
+    <section class="intro"><p class="eyebrow">A CONVERSA EM NÚMEROS</p><h1>Cada voz conta.</h1><p class="subtitle">Explore o ritmo da conversa, a participação e as palavras que conectam a equipe.</p><div class="session"><span id="session"></span><span id="quality" class="badge"></span></div></section>
+    <div id="notice" role="status" class="notice"></div>
+    <section class="controls" aria-label="Filtros do dashboard">
+      <label>Participante<select id="speaker"><option value="">Todos os participantes</option></select></label>
+      <label>Palavras no ranking<select id="limit"><option value="5">Top 5</option><option value="10" selected>Top 10</option><option value="20">Top 20</option></select></label>
+      <p>Os indicadores acompanham o filtro.<br>A participação usa o total da sessão.</p>
+    </section>
+    <section class="stats" aria-label="Indicadores" aria-live="polite">
+      <article><p>Fala estimada</p><strong id="speech"></strong><span>Soma dos segmentos de fala</span></article>
+      <article><p>Participantes</p><strong id="people"></strong><span>Com segmentos transcritos</span></article>
+      <article><p>Segmentos</p><strong id="segments"></strong><span>Trechos retornados pelo modelo</span></article>
+      <article><p>Palavras de conteúdo</p><strong id="word-count"></strong><span>Contagem sem stopwords</span></article>
+    </section>
+    <section class="charts">
+      <article class="panel"><div class="panel-heading"><div><p class="eyebrow">DISTRIBUIÇÃO</p><h2>Espaço de cada voz</h2></div><span class="badge">TEMPO ESTIMADO</span></div><p class="description">Participação na soma do tempo de fala da sessão.</p><div id="participation" aria-live="polite"></div></article>
+      <article class="panel"><div class="panel-heading"><div><p class="eyebrow">VOCABULÁRIO</p><h2>Palavras em destaque</h2></div></div><p class="description">Frequência somada entre os participantes selecionados.</p><div id="words" aria-live="polite"></div></article>
+    </section>
+    <section class="panel details"><p class="eyebrow">VISÃO DETALHADA</p><h2>Participação por pessoa</h2><div class="table-wrap"><table><caption>Indicadores dos participantes selecionados</caption><thead><tr><th scope="col">Participante</th><th scope="col">Fala estimada</th><th scope="col">Participação</th><th scope="col">Segmentos</th><th scope="col">Palavras</th></tr></thead><tbody id="details"></tbody></table></div></section>
+    <footer><p>O tempo é estimado por segmentos Whisper e pode incluir silêncios ou falas sobrepostas. A soma não representa a duração da sessão nem mede voz ativa exata.</p><p id="generated"></p><p>Este arquivo contém nomes e palavras agregadas da sessão. Compartilhe apenas com autorização.</p></footer>
+    <noscript>Ative JavaScript para visualizar os gráficos e usar os filtros deste relatório local.</noscript>
+  </main>
+  <script id="dashboard-data" type="application/json">__DATA__</script>
+  <script>__SCRIPT__</script>
+</body>
+</html>
