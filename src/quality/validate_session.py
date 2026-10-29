@@ -5,11 +5,57 @@ from pathlib import Path
 import json
 import math
 
+import numpy as np
 import pandas as pd
 
 from src.ingestion.inspect_files import audio_files, audio_duration, get_speaker
 
 REQUIRED = {'session_id', 'speaker', 'source_file', 'start_s', 'end_s', 'text'}
+WORD_REQUIRED = {'session_id', 'speaker', 'source_file', 'start_s', 'end_s', 'word', 'probability'}
+
+
+def check_words(source: Path, track_map: dict, errors: list[str], session_id: str | None = None,
+                durations: dict | None = None):
+    """Valida words.parquet quando existir; sessoes antigas nao o possuem."""
+    if not source.exists():
+        return None
+    try:
+        words = pd.read_parquet(source)
+    except Exception as exc:
+        errors.append(f'Nao foi possivel ler words.parquet: {type(exc).__name__}: {exc}')
+        return None
+    missing = WORD_REQUIRED - set(words.columns)
+    if missing:
+        errors.append('words.parquet sem colunas obrigatorias: ' + ', '.join(sorted(missing)))
+        return int(len(words))
+    start = pd.to_numeric(words['start_s'], errors='coerce')
+    end = pd.to_numeric(words['end_s'], errors='coerce')
+    start, end = start.astype(float), end.astype(float)
+    invalid = (~np.isfinite(start)) | (~np.isfinite(end)) | (start < 0) | (end < start)
+    if invalid.any():
+        errors.append(f'{int(invalid.sum())} palavra(s) com timestamp invalido.')
+    unknown = ~words['source_file'].isin(track_map)
+    if unknown.any():
+        errors.append(f'{int(unknown.sum())} palavra(s) referenciam audio inexistente.')
+    if session_id is not None:
+        divergent = words['session_id'].astype(str).ne(session_id)
+        if divergent.any():
+            errors.append(f'{int(divergent.sum())} palavra(s) com session_id divergente.')
+    wrong = (~unknown) & words['speaker'].ne(words['source_file'].map(track_map))
+    if wrong.any():
+        errors.append(f'{int(wrong.sum())} palavra(s) associadas ao participante errado.')
+    exceeded = outside = 0
+    for filename, duration in (durations or {}).items():
+        if duration is None or not math.isfinite(duration) or duration <= 0:
+            continue
+        in_file = words['source_file'] == filename
+        exceeded += int((in_file & (end > duration + 2)).sum())
+        outside += int((in_file & (start >= duration)).sum())
+    if exceeded:
+        errors.append(f'{exceeded} palavra(s) terminam mais de 2s depois do fim do audio.')
+    if outside:
+        errors.append(f'{outside} palavra(s) comecam depois do fim do audio; revisao manual necessaria.')
+    return int(len(words))
 
 
 def validate_session(session_id: str, base_dir: Path = Path('.')) -> dict:
@@ -115,6 +161,8 @@ def validate_session(session_id: str, base_dir: Path = Path('.')) -> dict:
             if group.empty:
                 warnings.append(f'{speaker} sem trechos transcritos; verifique se falou na gravacao.')
 
+    word_count = check_words(processed_dir / 'words.parquet', track_map, errors, session_id, durations)
+
     report = {
         'session_id': session_id,
         'generated_at_utc': datetime.now(timezone.utc).isoformat(),
@@ -122,7 +170,8 @@ def validate_session(session_id: str, base_dir: Path = Path('.')) -> dict:
         'summary': {
             'audio_tracks': len(tracks),
             'transcript_segments': count,
-            'participants_with_segments': sum(p['segments'] > 0 for p in participants.values())
+            'participants_with_segments': sum(p['segments'] > 0 for p in participants.values()),
+            'word_timestamps': word_count
         },
         'participants': participants,
         'errors': errors,

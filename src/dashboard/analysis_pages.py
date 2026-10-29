@@ -4,12 +4,18 @@ import pandas as pd
 import streamlit as st
 
 from src.dashboard.analytics import (activity_windows, characteristic_words, compare_people,
-                                     daily_metrics, frequent_expressions, search_context,
-                                     segment_frame, session_summary)
+                                     daily_metrics, daily_timelapse, frequent_expressions,
+                                     search_context, segment_frame, session_summary, silence_stats,
+                                     timelapse_counts, words_per_minute)
+from src.dashboard.word_cloud import (clock, draw_word_cloud, frame_duration, layout_word_cloud,
+                                      participant_colors,
+                                      render_timelapse_gif)
 
 PAGES = ['Evolução por dia', 'Comparar participantes', 'Palavras características',
-         'Busca com contexto', 'Expressões frequentes', 'Linha do tempo', 'Resumo e assuntos', 'Sobreposições de fala']
+         'Busca com contexto', 'Expressões frequentes', 'Linha do tempo', 'Resumo e assuntos', 'Sobreposições de fala',
+         'Ritmo e silêncio', 'Timelapse da nuvem']
 CONTEXT_PAGES = set(PAGES[3:])
+DAILY_GIF_MS = 40000
 
 LABELS = {'speaker': 'Participante', 'word': 'Palavra', 'count': 'Ocorrências',
           'session_id': 'Sessão', 'start_s': 'Início (s)', 'end_s': 'Fim (s)', 'text': 'Trecho',
@@ -23,7 +29,10 @@ LABELS = {'speaker': 'Participante', 'word': 'Palavra', 'count': 'Ocorrências',
           'per_100_entries': 'Por 100 entradas de fala', 'kind': 'Tipo',
           'ongoing_start_s': 'Início do trecho anterior (s)', 'ongoing_end_s': 'Fim do trecho anterior (s)',
           'ongoing_text': 'Texto de quem já falava', 'lexical_similarity': 'Semelhança lexical (%)',
-          'topic_signal': 'Indício sobre o assunto'}
+          'topic_signal': 'Indício sobre o assunto', 'spoken_word_count': 'Palavras ditas',
+          'measured_speech_seconds': 'Fala medida (s)', 'words_per_minute': 'Palavras por minuto',
+          'silence_seconds': 'Silêncio (s)', 'gap_seconds': 'Pausa (s)', 'before_speaker': 'Antes',
+          'after_speaker': 'Depois', 'before_text': 'Texto antes', 'after_text': 'Texto depois'}
 
 
 def table_download(frame, key):
@@ -71,7 +80,7 @@ def render_analysis(page, data, datasets):
             frame = frame[frame.speaker == person]
         if frame['day'].nunique() < 2:
             st.info('O período selecionado contém apenas um dia. Novos dias permitirão acompanhar a evolução.')
-        label = st.selectbox('Indicador', ['Participação (%)', 'Fala estimada (s)', 'Palavras de conteúdo', 'Vocabulário distinto'], key='evolution_metric')
+        label = st.selectbox('Indicador', ['Participação (%)', 'Fala estimada (s)', 'Palavras de conteúdo', 'Vocabulário distinto', 'Palavras por minuto'], key='evolution_metric')
         field = {v: k for k, v in LABELS.items()}[label]
         dated = frame[frame.day != 'Sem data']
         if not dated.empty:
@@ -131,6 +140,13 @@ def render_analysis(page, data, datasets):
             table_download(frame.rename(columns={'rest_count': 'Ocorrências no grupo', 'own_rate': 'Pessoa · por mil',
                                                   'rest_rate': 'Grupo · por mil', 'difference': 'Diferença por mil'}),
                            'palavras_caracteristicas')
+        return
+
+    if page == 'Ritmo e silêncio':
+        render_rhythm(data)
+        return
+    if page == 'Timelapse da nuvem':
+        render_timelapse(data, datasets)
         return
 
     frame = segment_frame(data)
@@ -267,3 +283,157 @@ def render_analysis(page, data, datasets):
     table_download(topics, 'assuntos_com_referencias')
     with st.expander('Exportar trechos do resumo'):
         table_download(highlights, 'resumo_extrativo')
+
+
+def duration_text(seconds):
+    seconds = int(float(seconds) + 0.5)
+    hours, rest = divmod(seconds, 3600)
+    minutes, rest = divmod(rest, 60)
+    return f'{hours}h {minutes}min {rest}s' if hours else f'{minutes}min {rest}s'
+
+
+def word_frame(data):
+    return pd.DataFrame(data.get('word_timings', []), columns=['session_id', 'speaker', 'start_s', 'end_s', 'word'])
+
+
+@st.cache_data(show_spinner=False)
+def cached_silence(frame, recording, minimum, segments):
+    return silence_stats(frame, recording, minimum, segments=segments)
+
+
+@st.cache_data(show_spinner=False)
+def cached_counts(frame, step_seconds, speaker, limit):
+    return timelapse_counts(frame, step_seconds, speaker, limit)
+
+
+@st.cache_data(show_spinner=False)
+def cached_daily(_datasets, key, speaker, limit):
+    # `key` identifica o conjunto de dados; `_datasets` (lista de dicts) não entra no hash.
+    return daily_timelapse(_datasets, speaker, limit)
+
+
+@st.cache_data(show_spinner=False)
+def cached_layout(frequencies):
+    return layout_word_cloud(frequencies, reserve_caption=True)
+
+
+def render_rhythm(data):
+    from src.dashboard.charts import labeled_bars
+
+    st.caption('Palavras por minuto = palavras ditas ÷ fala medida. A fala medida une os intervalos de cada pessoa '
+               'e considera como fala as pausas de até 0,5 s. São estimativas, não um cronômetro exato.')
+    sources = data.get('timing_sources', {})
+    lacking = sorted(session for session, source in sources.items() if source == 'trechos')
+    if lacking:
+        subject = ('Esta sessão não tem' if len(sources) < 2 else
+                   f'A sessão {lacking[0]} não tem' if len(lacking) == 1 else
+                   f'Algumas sessões ({", ".join(lacking)}) não têm')
+        st.warning(f'{subject} tempo por palavra; a fala medida usa os trechos do Whisper e pode incluir '
+                   'silêncios. Reprocesse com transcribe para medir por palavra.')
+    table = pd.DataFrame(data['participants']).reindex(
+        columns=['speaker', 'spoken_word_count', 'measured_speech_seconds']).fillna(0)
+    table['words_per_minute'] = [words_per_minute(r.spoken_word_count, r.measured_speech_seconds)
+                                 for r in table.itertuples()]
+    ranked = table.dropna(subset=['words_per_minute']).sort_values(['words_per_minute', 'speaker'],
+                                                                     ascending=[False, True])
+    if ranked.empty:
+        st.info('Sem fala medida para calcular palavras por minuto.')
+    else:
+        st.altair_chart(labeled_bars(ranked, 'speaker', 'words_per_minute', 'Palavras por minuto', '#7dd3fc'),
+                        width='stretch')
+    table_download(table, 'ritmo_de_fala')
+
+    st.markdown('**Silêncio**')
+    segments = segment_frame(data)
+    timed = word_frame(data)
+    sessions = sorted(set(segments.session_id) | set(timed.session_id))
+    if not sessions:
+        st.info('Nenhum trecho disponível no período selecionado.')
+        return
+    session = st.selectbox('Gravação', sessions, key='rhythm_session')
+    minimum = st.slider('Pausa mínima (segundos)', 1, 120, 3, key='rhythm_gap')
+    in_session = timed[timed.session_id == session]
+    own_segments = segments[segments.session_id == session]
+    stats = cached_silence(in_session if not in_session.empty else own_segments,
+                           data.get('recordings', {}).get(session), float(minimum), own_segments)
+    metrics = st.columns(3)
+    metrics[0].metric('Duração considerada', duration_text(stats['duration_seconds']))
+    metrics[1].metric('Com fala', duration_text(stats['spoken_seconds']))
+    metrics[2].metric('Silêncio estimado',
+                      f'{duration_text(stats["silence_seconds"])} ({stats["silence_share"]:.1f}%)')
+    st.caption(f'Base: {stats["basis"]}. Só conta as faixas presentes nesta pasta: se faltam participantes, '
+               'as falas deles aparecem como silêncio. O Whisper também pode inventar texto em silêncios longos.')
+    if stats['gaps'].empty:
+        st.info('Nenhuma pausa com essa duração mínima.')
+    else:
+        table_download(stats['gaps'], 'pausas_silencio')
+
+
+def render_timelapse(data, datasets):
+    st.caption('A nuvem cresce com as palavras de conteúdo acumuladas. As posições são fixas: a mesma palavra '
+               'fica no mesmo lugar em todos os quadros.')
+    names = sorted(p['speaker'] for p in data['participants'])
+    mode = st.radio('Modo', ['Dentro de uma gravação', 'Dia a dia'], horizontal=True, key='timelapse_mode')
+    everyone = lambda value: 'Todos os participantes' if value is None else value
+    labels = None
+    step = None
+    if mode == 'Dia a dia':
+        if len({d.get('day') for d in datasets if d.get('day')}) < 2:
+            st.info('O modo dia a dia precisa de pelo menos dois dias com data.')
+            return
+        controls = st.columns(2)
+        speaker = controls[0].selectbox('Participante', [None, *names], key='timelapse_speaker', format_func=everyone)
+        limit = controls[1].select_slider('Máximo de palavras', options=[20, 50, 100], value=50, key='timelapse_limit')
+        key = tuple((d.get('day'), d.get('session_id'), len(d['words'])) for d in datasets)
+        days, frames = cached_daily(datasets, key, speaker, limit)
+        if not frames or not frames[-1][1]:
+            st.info('Nenhuma palavra de conteúdo para este filtro.')
+            return
+        labels = [f'{day[8:10]}/{day[5:7]}/{day[:4]}' for day in days]
+        total = len(frames)
+        period = f'{days[0]}_{days[-1]}'
+    else:
+        segments = segment_frame(data)
+        timed = word_frame(data)
+        sessions = sorted(set(segments.session_id) | set(timed.session_id))
+        if not sessions:
+            st.info('Nenhum trecho disponível no período selecionado.')
+            return
+        controls = st.columns(4)
+        session = controls[0].selectbox('Gravação', sessions, key='timelapse_session')
+        step = controls[1].selectbox('Intervalo (minutos)', [1, 5, 10, 15, 30], index=1, key='timelapse_step')
+        speaker = controls[2].selectbox('Participante', [None, *names], key='timelapse_speaker', format_func=everyone)
+        limit = controls[3].select_slider('Máximo de palavras', options=[20, 50, 100], value=50, key='timelapse_limit')
+        source = timed[timed.session_id == session].rename(columns={'word': 'text'})
+        if source.empty:
+            source = segments[segments.session_id == session]
+        frames = cached_counts(source, step * 60, speaker, limit)
+        total = data.get('recordings', {}).get(session) or (float(source.end_s.max()) if not source.empty else 0)
+        period = session
+    if not frames or not frames[-1][1]:
+        st.info('Nenhuma palavra de conteúdo para este filtro.')
+        return
+    layout = cached_layout(frames[-1][1])
+    present = {item['speaker'] for item in layout['items'].values()}
+    legend = {name: color for name, color in participant_colors(names).items() if name in present}
+    token = f'{mode}_{period}_{step}_{speaker}_{limit}_{len(frames)}'
+    position = 1
+    if len(frames) > 1:
+        position = st.slider('Quadro', 1, len(frames), len(frames), key=f'timelapse_frame_{token}')
+    end, counts = frames[position - 1]
+    caption = labels[position - 1] if labels else f'{clock(min(end, total))} de {clock(total)}'
+    st.image(draw_word_cloud(layout, counts, legend, caption), caption=f'Quadro {position} de {len(frames)}',
+             width='stretch')
+    if st.button('Gerar GIF', key='timelapse_gif_button'):
+        with st.spinner('Gerando o GIF...'):
+            gif = render_timelapse_gif(layout, frames, legend, total, labels=labels,
+                                       total_ms=DAILY_GIF_MS if labels else None)
+        st.session_state['timelapse_gif'] = (token, gif)
+    if labels and frame_duration(len(frames), DAILY_GIF_MS) * (len(frames) + 2) > DAILY_GIF_MS * 1.001:
+        st.caption(f'Com {len(frames)} dias, o GIF dura {frame_duration(len(frames), DAILY_GIF_MS) * (len(frames) + 2) / 1000:.1f} s: '
+                   'cada quadro tem no mínimo 20 ms, pois os navegadores tratam valores menores como 100 ms.')
+    stored = st.session_state.get('timelapse_gif')
+    if stored and stored[0] == token:
+        st.download_button('Baixar GIF', stored[1], file_name=f'timelapse_{period}.gif', mime='image/gif',
+                           key='timelapse_gif_download')
+    st.caption('Nomes e palavras da sessão podem ser privados. Compartilhe somente com autorização.')

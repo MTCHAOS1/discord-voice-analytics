@@ -8,6 +8,7 @@ from src.transcription.backup import backup_session
 from src.ingestion.session_catalog import recording_start
 
 COLUMNS = ['session_id', 'speaker', 'source_file', 'start_s', 'end_s', 'text']
+WORD_COLUMNS = ['session_id', 'speaker', 'source_file', 'start_s', 'end_s', 'word', 'probability']
 
 
 def bound_timestamps(start: float, end: float, duration: float | None):
@@ -47,8 +48,9 @@ def transcribe(session_id: str, model_name: str = 'large-v3', device: str = 'cpu
     print(f'Carregando Faster-Whisper: modelo={model_name}, dispositivo={device}, precisão={compute_type}')
     model = WhisperModel(model_name, device=device, compute_type=compute_type)
     rows = []
+    word_rows = []
     metadata = {'session_id': session_id, 'model': model_name, 'device': device, 'tracks': [],
-                'timestamp_events': [], 'backup_path': str(backup.resolve()) if backup else None,
+                'timestamp_events': [], 'word_timestamps': True, 'backup_path': str(backup.resolve()) if backup else None,
                 'recording_started_at': recording_start(input_dir)}
     for path in tracks:
         speaker = get_speaker(path.name)
@@ -57,7 +59,7 @@ def transcribe(session_id: str, model_name: str = 'large-v3', device: str = 'cpu
         metadata['tracks'].append({'speaker': speaker, 'file': path.name, 'duration_s': duration})
         segments, _ = model.transcribe(
             str(path), language='pt', beam_size=5, vad_filter=True,
-            condition_on_previous_text=False
+            condition_on_previous_text=False, word_timestamps=True
         )
         segment_count = 0
         for seg in segments:
@@ -84,12 +86,31 @@ def transcribe(session_id: str, model_name: str = 'large-v3', device: str = 'cpu
                 'text': transcript_text,
             })
             segment_count += 1
+            for item in getattr(seg, 'words', None) or []:
+                word = str(item.word).strip()
+                if not word:
+                    continue
+                word_start = round(float(item.start), 3)
+                word_end = round(float(item.end), 3)
+                word_end, _, _ = bound_timestamps(word_start, word_end, duration)
+                word_rows.append({
+                    'session_id': session_id, 'speaker': speaker, 'source_file': path.name,
+                    'start_s': word_start, 'end_s': word_end, 'word': word,
+                    'probability': getattr(item, 'probability', None),
+                })
         print(f'  Trechos transcritos: {segment_count}')
 
     df = pd.DataFrame(rows, columns=COLUMNS)
     if not df.empty:
         df = df.sort_values(['start_s', 'speaker', 'end_s']).reset_index(drop=True)
     df.to_parquet(output_dir / 'segments.parquet', index=False)
+    words_df = pd.DataFrame(word_rows, columns=WORD_COLUMNS)
+    if not words_df.empty:
+        words_df['probability'] = pd.to_numeric(words_df['probability'], errors='coerce').astype(float)
+        words_df = words_df.sort_values(['start_s', 'speaker']).reset_index(drop=True)
+    else:
+        words_df = words_df.astype({'start_s': float, 'end_s': float, 'probability': float})
+    words_df.to_parquet(output_dir / 'words.parquet', index=False)
     df.to_csv(output_dir / 'segments.csv', index=False, encoding='utf-8-sig')
     with (output_dir / 'transcricao.txt').open('w', encoding='utf-8') as file:
         for row in df.itertuples(index=False):
