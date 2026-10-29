@@ -239,6 +239,50 @@ class TestStreamlitDashboard(unittest.TestCase):
                     self.assertFalse(app.exception)
             load.assert_not_called()
 
+    def test_timelapse_navigation_and_gif_generation(self):
+        app = self.app().run()
+        app.radio(key='page').set_value('Timelapse da nuvem').run()
+        self.assertFalse(app.exception)
+        app.radio(key='timelapse_mode').set_value('Dia a dia').run()
+        self.assertFalse(app.exception)
+        self.assertEqual(len(app.slider), 1)
+        app.slider[0].set_value(1).run()
+        self.assertFalse(app.exception)
+        app.button(key='timelapse_gif_button').click().run()
+        self.assertFalse(app.exception)
+        self.assertEqual(app.session_state['timelapse_gif'][1][:6], b'GIF89a')
+        app.radio(key='page').set_value('Ritmo e silêncio').run()
+        self.assertFalse(app.exception)
+        app.radio(key='page').set_value('Evolução por dia').run()
+        app.selectbox(key='evolution_metric').select('Palavras por minuto').run()
+        self.assertFalse(app.exception)
+
+    def test_timelapse_inside_recording_with_several_frames_and_participant_without_words(self):
+        from src.dashboard.analytics import demo_analytics
+        data, datasets = demo_analytics()
+        data['word_timings'] = [dict(row, start_s=row['start_s'] * 5, end_s=row['end_s'] * 5)
+                                for row in data['word_timings']]
+        data['recordings'] = {key: 400 for key in data['recordings']}
+        data['participants'] = [*data['participants'], dict(speaker='Davi', segments=0, estimated_speech_seconds=0,
+                                                            content_word_count=0)]
+        with patch('src.dashboard.analytics.demo_analytics', return_value=(data, datasets)):
+            app = self.app().run()
+            app.radio(key='page').set_value('Timelapse da nuvem').run()
+            app.selectbox(key='timelapse_step').select(1).run()
+            self.assertFalse(app.exception)
+            frames = app.slider[0].max
+            self.assertGreater(frames, 1)
+            app.slider[0].set_value(2).run()
+            self.assertFalse(app.exception)
+            app.button(key='timelapse_gif_button').click().run()
+            self.assertFalse(app.exception)
+            self.assertEqual(app.session_state['timelapse_gif'][1][:6], b'GIF89a')
+            app.selectbox(key='timelapse_speaker').select('Davi').run()
+            self.assertEqual(app.info[-1].value, 'Nenhuma palavra de conteúdo para este filtro.')
+            app.radio(key='timelapse_mode').set_value('Dia a dia').run()
+            self.assertFalse(app.exception)
+            self.assertEqual(app.info[-1].value, 'Nenhuma palavra de conteúdo para este filtro.')
+
     def test_context_search_and_comparison_interactions(self):
         app = self.app().run()
         app.radio(key='page').set_value('Busca com contexto').run()

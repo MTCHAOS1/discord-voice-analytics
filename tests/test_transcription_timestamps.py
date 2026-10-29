@@ -70,6 +70,67 @@ class TestTranscriptionTimestamps(unittest.TestCase):
             self.assertEqual(pd.read_parquet(output).iloc[0].end_s, 35)
             self.assertEqual(report['status'], 'WARN')
 
+    def test_word_timestamps_are_saved_bounded_and_validated(self):
+        with TemporaryDirectory() as temp:
+            root = Path(temp)
+            raw = root / 'data/raw/fixture'
+            raw.mkdir(parents=True)
+            (raw / '1-Aurora.flac').touch()
+            words = [SimpleNamespace(start=7.0, end=7.5, word=' teste', probability=0.9),
+                     SimpleNamespace(start=8.0, end=12.0, word=' final', probability=0.8),
+                     SimpleNamespace(start=9.0, end=9.5, word='  ', probability=0.5)]
+            model = Mock()
+            model.transcribe.return_value = ([SimpleNamespace(start=7, end=12, text=' teste final ', words=words)], None)
+            whisper = SimpleNamespace(WhisperModel=Mock(return_value=model))
+            with patch.dict('sys.modules', {'faster_whisper': whisper}), \
+                 patch('src.transcription.transcribe.audio_duration', return_value=10):
+                output = transcribe('fixture', base_dir=root)
+            self.assertTrue(model.transcribe.call_args.kwargs['word_timestamps'])
+            table = pd.read_parquet(output.with_name('words.parquet'))
+            self.assertEqual(list(table.columns), ['session_id', 'speaker', 'source_file', 'start_s', 'end_s',
+                                                   'word', 'probability'])
+            self.assertEqual(table.word.tolist(), ['teste', 'final'])
+            self.assertEqual(table.end_s.tolist(), [7.5, 10.0])
+            metadata = json.loads(output.with_name('metadata.json').read_text(encoding='utf-8'))
+            self.assertTrue(metadata['word_timestamps'])
+            analyze('fixture', base_dir=root)
+            with patch('src.quality.validate_session.audio_duration', return_value=10):
+                report = validate_session('fixture', root)
+            self.assertEqual(report['summary']['word_timestamps'], 2)
+            self.assertFalse([e for e in report['errors'] if 'palavra' in e])
+            table['speaker'] = 'Outra'
+            table.to_parquet(output.with_name('words.parquet'), index=False)
+            with patch('src.quality.validate_session.audio_duration', return_value=10):
+                report = validate_session('fixture', root)
+            self.assertEqual(report['status'], 'FAIL')
+            self.assertTrue(any('participante errado' in e and 'palavra' in e for e in report['errors']))
+
+    def test_validation_flags_wrong_session_and_word_outside_duration(self):
+        with TemporaryDirectory() as temp:
+            root = Path(temp)
+            raw = root / 'data/raw/fixture'
+            raw.mkdir(parents=True)
+            (raw / '1-Aurora.flac').touch()
+            words = [SimpleNamespace(start=7.0, end=7.5, word=' teste', probability=0.9)]
+            model = Mock()
+            model.transcribe.return_value = ([SimpleNamespace(start=7, end=8, text=' teste ', words=words)], None)
+            whisper = SimpleNamespace(WhisperModel=Mock(return_value=model))
+            with patch.dict('sys.modules', {'faster_whisper': whisper}), \
+                 patch('src.transcription.transcribe.audio_duration', return_value=10):
+                output = transcribe('fixture', base_dir=root)
+            analyze('fixture', base_dir=root)
+            path = output.with_name('words.parquet')
+            table = pd.read_parquet(path)
+            table['session_id'] = 'outra'
+            table['start_s'], table['end_s'] = 11.0, 14.0
+            table.to_parquet(path, index=False)
+            with patch('src.quality.validate_session.audio_duration', return_value=10):
+                report = validate_session('fixture', root)
+            self.assertEqual(report['status'], 'FAIL')
+            text = '\n'.join(report['errors'])
+            self.assertIn('palavra(s) com session_id divergente', text)
+            self.assertIn('palavra(s) comecam depois do fim do audio', text)
+
     def test_valid_timestamps_remain_pass(self):
         with TemporaryDirectory() as temp:
             _, report = self.process_fixture(Path(temp), 7, 10)

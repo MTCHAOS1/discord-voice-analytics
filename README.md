@@ -168,6 +168,28 @@ Para uma sessão local, substitua `--demo` por `--session session_001`.
 O HTML não inclui áudio nem frases completas da transcrição, mas pode conter
 nomes e palavras privadas. O comando não sobrescreve um arquivo já existente.
 
+## Ritmo de fala e silêncio
+
+O `transcribe` agora pede ao Whisper o tempo de cada palavra e grava
+`data/processed/<sessao>/words.parquet`. A página **Ritmo e silêncio** calcula
+palavras por minuto (palavras ditas ÷ fala medida) e o silêncio da gravação. A
+fala medida une os intervalos de cada pessoa, e pausas de até 0,5 s contam como
+fala. Sobreposições são contadas uma vez por pessoa.
+
+Limitações: são estimativas. Só entram as faixas presentes na pasta, então
+participantes ausentes aparecem como silêncio. O Whisper pode inventar texto em
+silêncios longos, o que reduz o silêncio medido. Sessões antigas não têm
+`words.parquet`: o dashboard usa os trechos do Whisper (que podem incluir
+silêncios) e avisa; rode `transcribe` de novo para medir por palavra.
+
+## Timelapse da nuvem
+
+A página **Timelapse da nuvem** mostra a nuvem de palavras crescendo ao longo de
+uma gravação (intervalos de 1 a 30 minutos) ou dia a dia. As posições são fixas:
+a mesma palavra fica no mesmo lugar em todos os quadros. O botão "Gerar GIF"
+cria um arquivo para download; o GIF contém palavras da conversa e deve ser
+compartilhado só com autorização. O HTML exportado não inclui tempos por palavra.
+
 ## Timestamps e backups
 
 A transcrição limita o fim de intervalos válidos à duração medida pelo ffprobe.
